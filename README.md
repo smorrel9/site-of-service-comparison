@@ -1,5 +1,7 @@
 # Site-of-Service Price Comparison
 
+**Live at [smorrel9.github.io/site-of-service-comparison](https://smorrel9.github.io/site-of-service-comparison/)** (GitHub Pages, deployed automatically on push to `main` via `.github/workflows/pages.yml`).
+
 A separate tool from the main `hospital-price-transparency` app — no shared code, no shared live database. The idea: for a lot of procedures, Medicare pays a different amount depending on *where* the procedure happens — a doctor's office, an ambulatory surgical center (ASC), or a hospital outpatient department (HOPD) — even though it's the same CPT/HCPCS code. Most people never see that gradient. This makes it searchable.
 
 **See [`Healthcare Finance Exceptions Log.md`](./Healthcare%20Finance%20Exceptions%20Log.md) for the running list of non-obvious billing rules found while building this** — none of them were visible from the data alone; each one needed real healthcare finance/operations knowledge to catch. It's the clearest evidence for why this kind of tool needs a domain expert in the loop, not just a script.
