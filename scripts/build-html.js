@@ -39,6 +39,10 @@ const CATEGORIES = [
   { label: 'Urinary system', range: [50010, 53899] },
   { label: 'Nervous system', range: [61000, 64999] },
   { label: 'Respiratory system', range: [30000, 32999] },
+  { label: 'Diagnostic radiology (X-ray, CT, MRI, fluoroscopy)', range: [70010, 76499] },
+  { label: 'Diagnostic ultrasound', range: [76506, 76999] },
+  { label: 'Radiation oncology', range: [77261, 77799] },
+  { label: 'Nuclear medicine', range: [78012, 79999] },
 ];
 
 const CSS = `
