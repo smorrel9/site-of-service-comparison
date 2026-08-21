@@ -159,6 +159,7 @@ function buildHtml(dataset) {
 
   return `<!doctype html><html><head><meta charset="utf-8">
 <title>Site-of-Service Price Comparison</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%8F%A5</text></svg>">
 <style>${CSS}</style>
 </head><body>
 <h1>Medicare Site-of-Service Price Comparison</h1>
