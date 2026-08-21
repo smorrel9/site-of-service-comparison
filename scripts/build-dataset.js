@@ -65,6 +65,36 @@ import { fileURLToPath } from 'url';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import Database from 'better-sqlite3';
 
+// Second exemption from the Pass 2 ratio heuristic (see file header and
+// README "Known limitations"): the Cardiovascular System CPT chapter
+// (33016-37799) is a well-documented office/OBL-based specialty area —
+// vascular access, venous procedures (sclerotherapy, PICC lines), cardiac
+// device implants (loop recorders), and peripheral vascular intervention
+// (atherectomy, IVL, stenting) are routinely done in office-based labs, a
+// widely-recognized trend directly tied to CMS's non-facility payment for
+// these codes. A huge ratio here (found some at 200x+) usually reflects real
+// expensive disposable cost (atherectomy catheters, IVL devices, stents,
+// drug-coated balloons — often $3,000-$10,000+ each), not an unrealistic
+// theoretical allocation. Verified: Pass 1 (exact-match) already catches
+// genuinely facility-only codes within this chapter on its own (e.g. 33533,
+// CABG, ratio exactly 1.0 — never reaches Pass 2), so exempting the whole
+// chapter from Pass 2 is safe rather than needing a narrower sub-range.
+// Percutaneous AV fistula creation (36836, 36837) — a newer, less-invasive
+// dialysis-access technique tied to office-based vascular access centers —
+// sits in this range too. Does NOT cover neuro-interventional codes (e.g.
+// 61626, vascular embolization) which live in the Nervous System chapter
+// (61000-64999) and stay subject to Pass 2 — confirmed clinically
+// inappropriate for a standard office by the person who caught this bug.
+const OFFICE_RATIO_EXEMPT_RANGES = [
+  [33016, 37799], // Cardiovascular System
+];
+
+function isInExemptRange(code) {
+  const n = parseInt(code, 10);
+  if (isNaN(n)) return false;
+  return OFFICE_RATIO_EXEMPT_RANGES.some(([lo, hi]) => n >= lo && n <= hi);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'prices.db');
@@ -189,10 +219,11 @@ function main() {
     // ran 1x-8x); 15x sits comfortably above all of them. This WILL have
     // false positives/negatives at the margin; revisit with a curated list.
     const OFFICE_RATIO_THRESHOLD = 15;
+    const officeRatioExempt = isInExemptRange(r.code);
     const officeRatio = (!officeNotDifferentiated && rawHasOffice && (r.facility_pe_rvu ?? 0) > 0)
       ? (r.nonfac_pe_rvu ?? 0) / r.facility_pe_rvu
       : null;
-    const officeRatioFlagged = officeRatio != null && officeRatio > OFFICE_RATIO_THRESHOLD;
+    const officeRatioFlagged = !officeRatioExempt && officeRatio != null && officeRatio > OFFICE_RATIO_THRESHOLD;
 
     const hasOffice = rawHasOffice && !officeNotDifferentiated && !officeRatioFlagged;
     const officeTotal = hasOffice ? r.nonfac_rate : null;
