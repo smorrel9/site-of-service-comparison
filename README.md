@@ -15,19 +15,25 @@ A fresh SQLite database, independent of the hospital app's `prices.db` (that one
 | Setting | Source | Column(s) |
 |---|---|---|
 | Doctor's office | PFS non-facility rate | `medicare_rates.nonfac_rate` |
-| Ambulatory surgical center | ASC Payment System | `medicare_asc_rates.payment_rate_austin` (null/not payable if `payable = 0`) |
-| Hospital outpatient | PFS facility rate + OPPS facility fee | `medicare_rates.facility_rate` + `medicare_rates.opps_austin_payment` |
+| Ambulatory surgical center | PFS facility rate (physician) + ASC Payment System (facility) | `medicare_rates.facility_rate` + `medicare_asc_rates.payment_rate_austin` |
+| Hospital outpatient | PFS facility rate (physician) + OPPS facility fee | `medicare_rates.facility_rate` + `medicare_rates.opps_austin_payment` |
 
-**4,456 codes have all three price points populated** — a solid working set for the comparison UI. Coverage isn't universal: some procedures (like most E&M office visits) aren't done in an ASC or hospital OR at all; some hospital-only procedures don't have an office rate; ASC payment indicator `N1` means "packaged, no separate ASC payment" for a given code even though the other two settings apply.
+ASC and hospital outpatient are both physician-fee + facility-fee — same physician component (Medicare's fee schedule only distinguishes facility vs. non-facility, not which facility type), different facility payer.
+
+**Office exclusion for facility-only procedures.** CMS publishes a non-facility PE RVU for nearly every code, even ones never actually performed in an office (e.g. `50045`, Nephrotomy w/exploration — major open surgery). The reliable signal: when `nonfac_pe_rvu` exactly equals `facility_pe_rvu`, CMS didn't calculate a genuine differentiated office rate, it just defaulted to the facility value — meaning there's no real practice pattern of doing this in-office. `build-dataset.js` nulls out Office in that case rather than showing a misleading number, and explains why in the Notes column. This turned out to be the norm, not the exception: **71% of codes hit this case** — only 29% have a genuinely differentiated office rate.
+
+**1,469 codes have all three price points populated** after that exclusion (3,291 have two — almost always ASC + hospital outpatient, with no real office setting; 985 have one). Coverage isn't universal for other reasons too: some procedures aren't on the ASC covered-procedures list at all; ASC payment indicator `N1` means "packaged, no separate ASC payment" even though the code is on the list; OPPS status indicators like `C` (inpatient-only) or `N` (packaged) mean no separate hospital facility fee.
 
 ## Real numbers, sanity-checked (Austin wage index, CY2026)
 
 | Code | Procedure | Office | ASC | Hospital outpatient |
 |---|---|---|---|---|
-| 45380 | Colonoscopy w/ biopsy | $498.91 | $645.76 | $1,381.19 |
-| 66984 | Cataract removal | $472.92 | $1,234.71 | $2,791.26 |
-| 29881 | Knee arthroscopy/meniscectomy | $524.77 | $1,617.33 | $3,811.68 |
-| 43239 | EGD w/ biopsy | $437.23 | $489.52 | $1,035.96 |
+| 45380 | Colonoscopy w/ biopsy | $498.91 | $824.86 | $1,381.19 |
+| 66984 | Cataract removal | — (facility-only, see above) | $1,707.63 | $2,791.26 |
+| 29881 | Knee arthroscopy/meniscectomy | — (facility-only) | $2,142.10 | $3,811.68 |
+| 43239 | EGD w/ biopsy | $437.23 | $614.36 | $1,035.96 |
+
+Cataract removal and knee arthroscopy are exactly the "never done in-office" case the exclusion logic above catches — both used to show an office price before that fix, which wasn't real.
 
 Consistent office < ASC < hospital-outpatient ordering, matching well-documented site-of-service cost gradients (cataract surgery being dramatically cheaper in an ASC than a hospital is a famous example in health policy). Re-run `npm run fetch-asc` to print more samples or refresh the data.
 
@@ -39,9 +45,9 @@ Consistent office < ASC < hospital-outpatient ordering, matching well-documented
 
 ## The app (`public/index.html`)
 
-Built for a different audience than the consumer-facing hospital app — healthcare finance/operations people who want to pull a clean price list, not a single "should I worry about this bill" banner. Fully static: the entire dataset (7,557 codes, ~3MB) is embedded inline in the HTML as a `<script>` tag, so the file opens directly via `file://` in any browser — no server, no fetch, nothing to install. Rebuild it with `npm run build` after any data change.
+Built for a different audience than the consumer-facing hospital app — healthcare finance/operations people who want to pull a clean price list, not a single "should I worry about this bill" banner. Fully static: the entire dataset (5,745 codes, ~2.7MB) is embedded inline in the HTML as a `<script>` tag, so the file opens directly via `file://` in any browser — no server, no fetch, nothing to install. Rebuild it with `npm run build` after any data change.
 
-**Search**: by curated category (a starter list of ~16 CPT body-region/specialty ranges — Hand and Fingers, Knee, Digestive System, etc.), by a raw CPT/HCPCS range you type in directly, by pasting a specific list of codes, or by keyword against the plain-language description. Filters combine; there's also a checkbox to show only codes priced in all three settings.
+**Search**: by curated category (a starter list of ~16 CPT body-region/specialty ranges — Hand and Fingers, Knee, Digestive System, etc.), by a raw CPT/HCPCS range you type in directly, by pasting a specific list of codes, or by keyword against the plain-language description. Typing into the range or code-list fields clears any selected category so it doesn't silently keep overriding what you just typed (a real bug in the first version — category always won). There's also a checkbox to show only codes priced in all three settings.
 
 **Columns**: Code, Type, Description, Office (total), ASC – Physician / Facility / Total, Hospital Outpatient – Physician / Facility / Total, Notes. The ASC and hospital-outpatient physician-fee columns are deliberately the same number for a given code — Medicare's Physician Fee Schedule only distinguishes facility vs. non-facility, not which facility type, so that's not a bug. A setting's Total is left blank (not a $0 or a misleading physician-only number) whenever that setting's facility fee isn't separately payable for that code — the Notes column explains why (packaged, inpatient-only, not on the ASC list, etc.), sourced from the same OPPS/ASC indicator legends the main app uses.
 

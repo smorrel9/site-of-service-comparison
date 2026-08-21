@@ -218,8 +218,13 @@ function buildHtml(dataset) {
   Physician fee is identical for ASC and hospital outpatient by design — Medicare's Physician Fee Schedule only
   distinguishes facility vs. non-facility, not which facility type. Only the facility fee differs between the two.
   A setting's total is blank when that setting's facility fee isn't separately payable for that code (see Notes) —
-  intentional, not missing data. Source: CMS Physician Fee Schedule, OPPS Addendum B, and ASC Payment System
-  addenda, Austin TX wage-adjusted, CY2026.
+  intentional, not missing data. Office is left blank (not shown as equal to the facility rate) for codes Medicare's
+  fee schedule doesn't actually differentiate for office use — meaning it isn't realistically performed there.
+  <strong>Office has no separate facility-fee add-on</strong>: by CMS design, the non-facility rate is a single
+  bundled payment that already covers everything a facility fee would otherwise pay for (equipment, staff,
+  supplies) — that's specifically why office totals run lower than ASC/hospital totals for the same code, and why
+  Office doesn't split into two components the way ASC and Hospital Outpatient do. Source: CMS Physician Fee
+  Schedule, OPPS Addendum B, and ASC Payment System addenda, Austin TX wage-adjusted, CY2026.
 </footer>
 
 <script>
@@ -345,6 +350,14 @@ const DATA = ${JSON.stringify(dataset)};
   document.getElementById('clearBtn').addEventListener('click', clearSearch);
   document.getElementById('exportBtn').addEventListener('click', exportCsv);
   document.getElementById('category').addEventListener('change', search);
+  // Typing a manual range/code list always overrides a previously-selected
+  // category — otherwise a leftover category selection silently wins over
+  // whatever you just typed, which looked like "range/code lookup doesn't work."
+  [ 'rangeFrom', 'rangeTo', 'codeList' ].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      document.getElementById('category').value = '';
+    });
+  });
   [ 'rangeFrom', 'rangeTo', 'keyword', 'codeList' ].forEach(id => {
     document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
   });

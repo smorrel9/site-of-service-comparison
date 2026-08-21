@@ -10,7 +10,12 @@
  *
  * Column model, per code:
  *   - Office: a single PFS non-facility rate. No components to break out —
- *     it's one bundled physician payment covering office overhead.
+ *     it's one bundled physician payment covering office overhead. By CMS
+ *     design this number already includes everything a separate facility fee
+ *     would otherwise cover (equipment, staff, supplies) — there is no
+ *     additional office facility fee to add on top of it. That's WHY office
+ *     totals tend to run lower than ASC/hospital totals: the physician is
+ *     compensated for absorbing the overhead directly.
  *   - ASC: PFS facility rate (physician component, same number CMS pays for
  *     ANY facility setting) + ASC facility payment (facility component).
  *   - Hospital outpatient: the same PFS facility rate (physician component)
@@ -25,6 +30,18 @@
  * that setting's facility + total blank rather than showing a physician-fee-
  * only number that could be mistaken for the full price — safer for an
  * analyst pulling this into a spreadsheet without reading fine print.
+ *
+ * Office exclusion for facility-only procedures: CMS publishes a non-facility
+ * PE RVU for essentially every code, even ones never actually performed in an
+ * office (e.g. 50045, Nephrotomy w/exploration — major open surgery). The
+ * reliable signal is comparing nonfac_pe_rvu to facility_pe_rvu: when they're
+ * exactly equal, CMS didn't calculate a genuine differentiated office rate —
+ * it just defaulted to the facility PE RVU, meaning there's no real practice
+ * pattern of this being done in-office. When they differ, a genuine office
+ * rate exists. Verified against the data: ~71% of codes in this dataset hit
+ * the equal case (nonfac_rate == facility_rate to the penny) — a much larger
+ * share than expected, so this isn't an edge case, it's the norm for
+ * anything beyond routine office-based procedures.
  */
 
 import path from 'path';
@@ -58,11 +75,13 @@ function classifyCodeType(code) {
   return 'HCPCS';
 }
 
-function buildNotes({ code, hasOffice, oppsSI, oppsPayable, oppsPayment, ascIndicator, ascPayable, ascFound }) {
+function buildNotes({ code, hasOffice, officeNotDifferentiated, oppsSI, oppsPayable, oppsPayment, ascIndicator, ascPayable, ascFound }) {
   const notes = [];
 
-  if (!hasOffice) {
-    notes.push('No office (non-facility) rate published — not typically billed in an office setting.');
+  if (officeNotDifferentiated) {
+    notes.push("Office: not typically performed in-office — Medicare's fee schedule doesn't differentiate an office rate for this code (non-facility PE RVU defaults to the facility value).");
+  } else if (!hasOffice) {
+    notes.push('No office (non-facility) rate published for this code.');
   }
 
   if (!ascFound) {
@@ -100,6 +119,8 @@ function main() {
       fn.friendly_name,
       mr.nonfac_rate,
       mr.facility_rate,
+      mr.nonfac_pe_rvu,
+      mr.facility_pe_rvu,
       mr.opps_status_indicator,
       mr.opps_austin_payment,
       mr.apc_code,
@@ -116,7 +137,13 @@ function main() {
   console.log(`Read ${rows.length} candidate codes from the database`);
 
   const dataset = rows.map(r => {
-    const hasOffice = (r.nonfac_rate ?? 0) > 0;
+    const rawHasOffice = (r.nonfac_rate ?? 0) > 0;
+    // CMS defaults non-facility PE RVU to the facility PE RVU when a code
+    // isn't realistically performed in an office — same value means no real
+    // office rate was calculated, regardless of whether nonfac_rate > 0.
+    const officeNotDifferentiated = rawHasOffice
+      && Math.abs((r.nonfac_pe_rvu ?? 0) - (r.facility_pe_rvu ?? 0)) < 0.001;
+    const hasOffice = rawHasOffice && !officeNotDifferentiated;
     const officeTotal = hasOffice ? r.nonfac_rate : null;
 
     const physicianFacilityComponent = (r.facility_rate ?? 0) > 0 ? r.facility_rate : null;
@@ -138,6 +165,7 @@ function main() {
     const notes = buildNotes({
       code: r.code,
       hasOffice,
+      officeNotDifferentiated,
       oppsSI,
       oppsPayable,
       ascIndicator: r.asc_indicator,
