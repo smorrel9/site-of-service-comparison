@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+data/prices.db
+data/prices.db-shm
+data/prices.db-wal
+data/asc/
+data/site-of-service-dataset.json
