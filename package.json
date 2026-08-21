@@ -7,6 +7,7 @@
   "license": "MIT",
   "scripts": {
     "fetch-asc": "node scripts/fetch-asc.js",
+    "extract-pc-tc": "node scripts/extract-pc-tc-codes.js",
     "build-dataset": "node scripts/build-dataset.js",
     "build-html": "node scripts/build-html.js",
     "build": "npm run build-dataset && npm run build-html"

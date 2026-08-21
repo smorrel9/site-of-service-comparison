@@ -42,17 +42,42 @@
  * the equal case (nonfac_rate == facility_rate to the penny) — a much larger
  * share than expected, so this isn't an edge case, it's the norm for
  * anything beyond routine office-based procedures.
+ *
+ * EXCEPTION — codes with a genuine professional/technical (26/TC) component
+ * split, mostly radiology/imaging. For these, equal nonfac_pe/facility_pe on
+ * the GLOBAL row does NOT mean "never done in office" — it's a structural
+ * side effect of how PC/TC RVUs are built (the global row's PE RVU is just
+ * the 26 + TC rows summed, and technical/equipment cost doesn't carry a
+ * facility-vs-non-facility differential the way genuinely site-flexible
+ * procedures do). Chest X-ray (71046) and even MRI (73721) are routinely
+ * billed globally by practices/imaging centers that own their own equipment
+ * — the "global tier" for practice-licensed outpatient imaging. Verified by
+ * hand against the raw RVU file for both codes: global PE RVU == 26 PE RVU +
+ * TC PE RVU exactly, for both facility and non-facility columns. Codes with
+ * a real 26/TC split (see scripts/extract-pc-tc-codes.js,
+ * data/pc-tc-split-codes.json — 1,132 codes, mostly radiology) are exempted
+ * from the exact-match exclusion above; they still go through the 15x ratio
+ * check below like any other code.
  */
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'prices.db');
 const OUT_PATH = path.join(DATA_DIR, 'site-of-service-dataset.json');
+const PC_TC_PATH = path.join(DATA_DIR, 'pc-tc-split-codes.json');
+
+const PC_TC_SPLIT_CODES = existsSync(PC_TC_PATH)
+  ? new Set(JSON.parse(readFileSync(PC_TC_PATH, 'utf-8')))
+  : new Set();
+if (PC_TC_SPLIT_CODES.size === 0) {
+  console.warn('WARNING: data/pc-tc-split-codes.json not found or empty — run scripts/extract-pc-tc-codes.js first.');
+  console.warn('Radiology/imaging codes with a genuine PC/TC split may be wrongly excluded from Office without it.');
+}
 
 // Same classification the main app's MedicareBanner.jsx uses for OPPS status
 // indicators — kept in sync manually since this is a separate project.
@@ -75,11 +100,13 @@ function classifyCodeType(code) {
   return 'HCPCS';
 }
 
-function buildNotes({ code, hasOffice, officeNotDifferentiated, oppsSI, oppsPayable, oppsPayment, ascIndicator, ascPayable, ascFound }) {
+function buildNotes({ code, hasOffice, officeNotDifferentiated, officeRatioFlagged, officeRatio, oppsSI, oppsPayable, oppsPayment, ascIndicator, ascPayable, ascFound }) {
   const notes = [];
 
   if (officeNotDifferentiated) {
     notes.push("Office: not typically performed in-office — Medicare's fee schedule doesn't differentiate an office rate for this code (non-facility PE RVU defaults to the facility value).");
+  } else if (officeRatioFlagged) {
+    notes.push(`Office: excluded, unverified heuristic — non-facility PE RVU is ${officeRatio.toFixed(0)}x the facility PE RVU (threshold: 15x), typical of equipment/supply cost allocated to a theoretical office setting rather than real-world practice. Flagged for hand-curation, not confirmed. See README.`);
   } else if (!hasOffice) {
     notes.push('No office (non-facility) rate published for this code.');
   }
@@ -136,14 +163,38 @@ function main() {
 
   console.log(`Read ${rows.length} candidate codes from the database`);
 
+  let pcTcRescued = 0;
   const dataset = rows.map(r => {
     const rawHasOffice = (r.nonfac_rate ?? 0) > 0;
+    const hasPcTcSplit = PC_TC_SPLIT_CODES.has(r.code);
     // CMS defaults non-facility PE RVU to the facility PE RVU when a code
     // isn't realistically performed in an office — same value means no real
     // office rate was calculated, regardless of whether nonfac_rate > 0.
-    const officeNotDifferentiated = rawHasOffice
-      && Math.abs((r.nonfac_pe_rvu ?? 0) - (r.facility_pe_rvu ?? 0)) < 0.001;
-    const hasOffice = rawHasOffice && !officeNotDifferentiated;
+    // EXCEPT for codes with a genuine PC/TC split (see file header) — equal
+    // PE RVU there is structural, not a site-of-service signal.
+    const rawPeEqual = rawHasOffice && Math.abs((r.nonfac_pe_rvu ?? 0) - (r.facility_pe_rvu ?? 0)) < 0.001;
+    const officeNotDifferentiated = rawPeEqual && !hasPcTcSplit;
+    if (rawPeEqual && hasPcTcSplit) pcTcRescued++;
+
+    // Second pass, UNVERIFIED HEURISTIC (tagged for hand-curation — see
+    // README "Known limitations"): some codes get a genuinely differentiated
+    // but unrealistically large non-facility PE RVU, reflecting theoretical
+    // equipment/supply cost allocated to an office setting that wouldn't
+    // realistically stock it (e.g. 61626, vascular embolization: 75.7x ratio,
+    // $10,248 "office" price vs $746.74 facility). No clean CMS data flag
+    // exists for this — checked the raw RVU file's NON-FAC NA INDICATOR
+    // column directly, it's blank for 61626, so that's not it either.
+    // Threshold picked by calibrating against known-legitimate office
+    // procedures (EKG, laceration repair, eye exam, joint injection — all
+    // ran 1x-8x); 15x sits comfortably above all of them. This WILL have
+    // false positives/negatives at the margin; revisit with a curated list.
+    const OFFICE_RATIO_THRESHOLD = 15;
+    const officeRatio = (!officeNotDifferentiated && rawHasOffice && (r.facility_pe_rvu ?? 0) > 0)
+      ? (r.nonfac_pe_rvu ?? 0) / r.facility_pe_rvu
+      : null;
+    const officeRatioFlagged = officeRatio != null && officeRatio > OFFICE_RATIO_THRESHOLD;
+
+    const hasOffice = rawHasOffice && !officeNotDifferentiated && !officeRatioFlagged;
     const officeTotal = hasOffice ? r.nonfac_rate : null;
 
     const physicianFacilityComponent = (r.facility_rate ?? 0) > 0 ? r.facility_rate : null;
@@ -166,6 +217,8 @@ function main() {
       code: r.code,
       hasOffice,
       officeNotDifferentiated,
+      officeRatioFlagged,
+      officeRatio,
       oppsSI,
       oppsPayable,
       ascIndicator: r.asc_indicator,
@@ -178,6 +231,7 @@ function main() {
       code_type: classifyCodeType(r.code),
       description: r.friendly_name || r.raw_description || '',
       office_total: officeTotal,
+      office_flagged_unverified: officeRatioFlagged, // tag for hand-curation follow-up — see README
       asc_physician: ascPayable ? physicianFacilityComponent : null,
       asc_facility: ascFacility,
       asc_total: ascTotal,
@@ -203,6 +257,9 @@ function main() {
   console.log(`  All 3 settings: ${withAllThree}`);
   console.log(`  2 settings: ${withTwo}`);
   console.log(`  1 setting: ${withOne}`);
+  const ratioFlagged = filtered.filter(d => d.office_flagged_unverified).length;
+  console.log(`  Office excluded by 15x ratio heuristic (unverified, tagged for hand-curation): ${ratioFlagged}`);
+  console.log(`  Office rescued by PC/TC-split exemption (radiology/imaging global billing): ${pcTcRescued}`);
 
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(OUT_PATH, JSON.stringify(filtered), 'utf-8');

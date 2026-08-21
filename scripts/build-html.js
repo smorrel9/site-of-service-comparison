@@ -135,6 +135,12 @@ td.notes { color: var(--text-muted); font-size: 0.75rem; max-width: 280px; }
 td.code { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-wrap { max-height: 70vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 .empty-cell { color: var(--baseline); }
+.flag-badge {
+  display: inline-block; margin-left: 4px; padding: 1px 5px; border-radius: 4px;
+  background: #fab21933; color: #a66a00; font-size: 0.68rem; font-weight: 600;
+  cursor: help; vertical-align: middle;
+}
+@media (prefers-color-scheme: dark) { .flag-badge { background: #fab21944; color: #fab219; } }
 footer { margin-top: 20px; color: var(--text-muted); font-size: 0.75rem; }
 `;
 
@@ -183,6 +189,10 @@ function buildHtml(dataset) {
       <input type="checkbox" id="allThree">
       <label for="allThree">Only codes priced in all 3 settings</label>
     </div>
+    <div class="field checkbox-field">
+      <input type="checkbox" id="flaggedOnly">
+      <label for="flaggedOnly" title="Codes where Office was excluded by the unverified 15x ratio heuristic — for review, not confirmed. See README.">Only office-flagged codes (for review) ⚠</label>
+    </div>
     <button class="primary" id="searchBtn">Search</button>
     <button id="clearBtn">Clear</button>
   </div>
@@ -223,8 +233,20 @@ function buildHtml(dataset) {
   <strong>Office has no separate facility-fee add-on</strong>: by CMS design, the non-facility rate is a single
   bundled payment that already covers everything a facility fee would otherwise pay for (equipment, staff,
   supplies) — that's specifically why office totals run lower than ASC/hospital totals for the same code, and why
-  Office doesn't split into two components the way ASC and Hospital Outpatient do. Source: CMS Physician Fee
-  Schedule, OPPS Addendum B, and ASC Payment System addenda, Austin TX wage-adjusted, CY2026.
+  Office doesn't split into two components the way ASC and Hospital Outpatient do.
+  <br><br>
+  <strong>⚠ Office exclusion, second pass (unverified heuristic).</strong> Beyond the exact-match case above, some
+  codes get a genuinely differentiated but very large non-facility PE RVU — reflecting theoretical equipment/supply
+  cost CMS allocates to an office setting that wouldn't realistically stock it (e.g. vascular embolization). No clean
+  CMS data flag exists for this, so Office is excluded when the non-facility PE RVU exceeds <strong>15x</strong> the
+  facility PE RVU — a threshold calibrated against known real office procedures (which ran 1x–8x), not an official
+  rule. This <strong>will have false positives/negatives at the margin</strong> — flagged rows carry a ⚠ badge and are
+  explained in Notes; use "Only office-flagged codes" above to review them, and treat this as tagged for hand-curation,
+  not final. Radiology/imaging codes with a genuine professional/technical (26/TC) component split are exempted from
+  the exact-match rule entirely (equal PE RVU there reflects billing structure, not site-of-service — verified against
+  chest X-ray and MRI) but still go through the 15x check.
+  <br><br>
+  Source: CMS Physician Fee Schedule, OPPS Addendum B, and ASC Payment System addenda, Austin TX wage-adjusted, CY2026.
 </footer>
 
 <script>
@@ -249,6 +271,7 @@ const DATA = ${JSON.stringify(dataset)};
     const keyword = document.getElementById('keyword').value.trim().toLowerCase();
     const codeListRaw = document.getElementById('codeList').value.trim();
     const allThree = document.getElementById('allThree').checked;
+    const flaggedOnly = document.getElementById('flaggedOnly').checked;
 
     if (category) {
       const [a, b] = category.split('-');
@@ -268,6 +291,7 @@ const DATA = ${JSON.stringify(dataset)};
         if (fromNum != null && codeNum < fromNum) return false;
         if (toNum != null && codeNum > toNum) return false;
       }
+      if (flaggedOnly && !row.office_flagged_unverified) return false;
       if (keyword && !row.description.toLowerCase().includes(keyword)) return false;
       if (allThree && (row.office_total == null || row.asc_total == null || row.hopd_total == null)) return false;
       return true;
@@ -283,12 +307,21 @@ const DATA = ${JSON.stringify(dataset)};
     document.getElementById('keyword').value = '';
     document.getElementById('codeList').value = '';
     document.getElementById('allThree').checked = false;
+    document.getElementById('flaggedOnly').checked = false;
     currentRows = [];
     renderTable();
   }
 
   function fmt(v) {
     return v == null ? '<span class="empty-cell">—</span>' : '$' + v.toFixed(2);
+  }
+
+  function fmtOffice(row) {
+    if (row.office_total != null) return '$' + row.office_total.toFixed(2);
+    if (row.office_flagged_unverified) {
+      return '<span class="empty-cell">—</span><span class="flag-badge" title="Excluded by an unverified heuristic (non-facility PE RVU &gt;15x the facility value) — likely correct, but not hand-confirmed. See Notes and README.">⚠ unverified</span>';
+    }
+    return '<span class="empty-cell">—</span>';
   }
 
   function renderTable() {
@@ -310,7 +343,7 @@ const DATA = ${JSON.stringify(dataset)};
         <td class="code">\${r.code}</td>
         <td>\${r.code_type}</td>
         <td>\${r.description}</td>
-        <td class="num">\${fmt(r.office_total)}</td>
+        <td class="num">\${fmtOffice(r)}</td>
         <td class="num">\${fmt(r.asc_physician)}</td>
         <td class="num">\${fmt(r.asc_facility)}</td>
         <td class="num">\${fmt(r.asc_total)}</td>
@@ -324,11 +357,13 @@ const DATA = ${JSON.stringify(dataset)};
 
   function exportCsv() {
     if (!currentRows.length) { alert('No results to export — run a search first.'); return; }
-    const headers = ['Code', 'Type', 'Description', 'Office (total)', 'ASC - Physician', 'ASC - Facility',
-      'ASC (total)', 'Hospital Outpt - Physician', 'Hospital Outpt - Facility', 'Hospital Outpt (total)', 'Notes'];
+    const headers = ['Code', 'Type', 'Description', 'Office (total)', 'Office flagged (unverified exclusion)',
+      'ASC - Physician', 'ASC - Facility', 'ASC (total)', 'Hospital Outpt - Physician', 'Hospital Outpt - Facility',
+      'Hospital Outpt (total)', 'Notes'];
     const rows = currentRows.map(r => [
       r.code, r.code_type, r.description,
-      r.office_total ?? '', r.asc_physician ?? '', r.asc_facility ?? '', r.asc_total ?? '',
+      r.office_total ?? '', r.office_flagged_unverified ? 'Y' : '',
+      r.asc_physician ?? '', r.asc_facility ?? '', r.asc_total ?? '',
       r.hopd_physician ?? '', r.hopd_facility ?? '', r.hopd_total ?? '', r.notes || ''
     ]);
     const csv = [headers, ...rows].map(row =>
